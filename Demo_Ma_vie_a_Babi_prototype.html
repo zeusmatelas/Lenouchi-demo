@@ -1,0 +1,247 @@
+<!--
+Prototype: "Ma vie à Babi" - Démo Open World (HTML5 + three.js)
+But: fournir une mini-carte, zones (Yopougon, Abobo, Cocody, Plateau, Treichville, Banco), un personnage contrôlable, PNJ simples, et interactions (cliquer/toucher pour parler).
+Usage:
+- Télécharge ce fichier sur ton téléphone et ouvre-le dans le navigateur (Chrome/Android recommended).
+- Sur mobile: tapote pour te déplacer. Sur desktop: WASD / flèches.
+Notes:
+- C'est une démo très simplifiée pour tester l'idée sans Unity ni PC.
+- Si tu veux APK après tests, je peux te préparer une version packagée via un service de build en ligne.
+-->
+
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>Ma vie à Babi — Démo prototype</title>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111}
+    #uiTop{position:absolute;left:10px;top:10px;color:#fff;font-family:sans-serif;z-index:5}
+    #hud{position:absolute;right:10px;top:10px;color:#fff;font-family:sans-serif;z-index:5;text-align:right}
+    #minimap{position:absolute;left:10px;bottom:10px;width:140px;height:140px;border-radius:8px;background:rgba(255,255,255,0.06);z-index:5;padding:6px}
+    #log{position:absolute;left:10px;top:50px;color:#fff;z-index:5;font-family:sans-serif;background:rgba(0,0,0,0.3);padding:6px;border-radius:6px}
+    .btn{background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.08);padding:6px 10px;border-radius:6px;color:#fff;margin-left:6px}
+    #touchPad{position:absolute;left:0;bottom:0;width:45%;height:45%;z-index:4}
+    #touchMove{position:absolute;right:0;bottom:0;width:45%;height:45%;z-index:4}
+    #title{font-weight:700;font-size:18px}
+  </style>
+</head>
+<body>
+  <div id="uiTop"><div id="title">Ma vie à Babi — Prototype</div><div style="font-size:13px;opacity:0.9">Tapote pour bouger — PNJ parlent français/nouchi</div></div>
+  <div id="hud"><button class="btn" id="camBtn">Changer caméra</button><button class="btn" id="resetBtn">Reset position</button></div>
+  <div id="log">Prêt. Clique/touche une zone pour entendre un PNJ.</div>
+  <div id="minimap"></div>
+  <div id="touchPad"></div>
+  <div id="touchMove"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.163.0/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+// Basic scene setup
+let scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+let camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+let renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Minimap renderer (top-down)
+let miniRenderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+miniRenderer.setSize(140,140);
+miniRenderer.domElement.style.borderRadius = '8px';
+document.getElementById('minimap').appendChild(miniRenderer.domElement);
+let miniCam = new THREE.OrthographicCamera(-25,25,25,-25,0.1,500);
+miniCam.position.set(0,80,0);
+miniCam.lookAt(0,0,0);
+
+// Lights
+let hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.9);
+hemi.position.set(0,50,0);
+scene.add(hemi);
+let dir = new THREE.DirectionalLight(0xffffff, 0.6);
+dir.position.set(20,50,10);
+scene.add(dir);
+
+// Ground
+let ggeo = new THREE.PlaneGeometry(200,200);
+let gmat = new THREE.MeshLambertMaterial({color:0x6fbf73});
+let ground = new THREE.Mesh(ggeo, gmat);
+ground.rotation.x = -Math.PI/2;
+scene.add(ground);
+
+// Zones data
+const zones = [
+  {name:'Yopougon', pos:[-40,0,-20], color:0x2f86eb, nouchi:true},
+  {name:'Abobo', pos:[-40,0,30], color:0x2ecc71, nouchi:true},
+  {name:'Cocody', pos:[10,0,40], color:0xffc107, nouchi:false},
+  {name:'Plateau', pos:[40,0,0], color:0xffffff, nouchi:false},
+  {name:'Treichville', pos:[20,0,-40], color:0xff7043, nouchi:true},
+  {name:'Banco', pos:[0,0,-80], color:0x2e7d32, nouchi:false, nature:true}
+];
+
+// Create zone boxes
+let zoneObjects = [];
+let fontMat = new THREE.MeshBasicMaterial({color:0x000});
+zones.forEach(z=>{
+  let box = new THREE.Mesh(new THREE.BoxGeometry(24,2,24), new THREE.MeshLambertMaterial({color:z.color, opacity:0.95}));
+  box.position.set(z.pos[0],1,z.pos[2]);
+  box.userData = z;
+  scene.add(box);
+  zoneObjects.push(box);
+});
+
+// Player
+let player = new THREE.Mesh(new THREE.SphereGeometry(1.2,16,16), new THREE.MeshStandardMaterial({color:0x3333ff}));
+player.position.set(0,1.5,0);
+scene.add(player);
+camera.position.set(0,20,30);
+camera.lookAt(player.position);
+
+// Simple NPCs (as small boxes)
+let npcs = [];
+for(let i=0;i<12;i++){
+  let z = zones[i%zones.length];
+  let nx = z.pos[0] + (Math.random()*12-6);
+  let nz = z.pos[2] + (Math.random()*12-6);
+  let p = new THREE.Mesh(new THREE.BoxGeometry(1.2,2,1.2), new THREE.MeshLambertMaterial({color:0x8d5524}));
+  p.position.set(nx,1,nz);
+  p.userData = {talk: z.nouchi?`Yop: Eh mon frère, ça va? (nouchi)`:`Bonjour, comment ça va? (français)`, zone:z.name};
+  scene.add(p);
+  npcs.push(p);
+}
+
+// Raycaster for clicks/touches
+let raycaster = new THREE.Raycaster();
+let pointer = new THREE.Vector2();
+
+function onPointerDown(e){
+  e.preventDefault();
+  let clientX = e.touches? e.touches[0].clientX : e.clientX;
+  let clientY = e.touches? e.touches[0].clientY : e.clientY;
+  pointer.x = (clientX / window.innerWidth) * 2 - 1;
+  pointer.y = - (clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  let intersects = raycaster.intersectObjects(zoneObjects.concat(npcs));
+  if(intersects.length>0){
+    let obj = intersects[0].object;
+    if(obj.userData && obj.userData.name){
+      showLog(`Zone: ${obj.userData.name} — bienvenue!`);
+      // simple interaction: move player to center of zone
+      targetPos.set(obj.position.x, player.position.y, obj.position.z);
+    } else if(obj.userData && obj.userData.talk){
+      showLog(`${obj.userData.zone} NPC: ${obj.userData.talk}`);
+    }
+  } else {
+    // move to clicked point on ground
+    let planeIntersects = raycaster.intersectObject(ground);
+    if(planeIntersects.length>0){
+      targetPos.set(planeIntersects[0].point.x, player.position.y, planeIntersects[0].point.z);
+    }
+  }
+}
+
+window.addEventListener('pointerdown', onPointerDown);
+window.addEventListener('touchstart', onPointerDown);
+
+// Movement
+let targetPos = new THREE.Vector3().copy(player.position);
+let speed = 8; // units per second
+
+function animate(delta){
+  // move player toward target
+  let dir = new THREE.Vector3().subVectors(targetPos, player.position);
+  let dist = dir.length();
+  if(dist>0.2){
+    dir.normalize();
+    player.position.add(dir.multiplyScalar(speed*delta));
+    // rotate to direction
+    player.rotation.y = Math.atan2(dir.x, dir.z);
+  }
+  // camera follows player
+  let camTarget = new THREE.Vector3(player.position.x, player.position.y+6, player.position.z+14);
+  camera.position.lerp(camTarget, 0.08);
+  camera.lookAt(new THREE.Vector3(player.position.x, player.position.y+1, player.position.z));
+}
+
+// Minimap update: render scene from top
+function renderMini(){
+  miniRenderer.render(scene, miniCam);
+}
+
+// Simple HUD log
+function showLog(txt){
+  document.getElementById('log').innerText = txt;
+}
+
+// Camera toggle
+let camMode = 0; // 0 third-person, 1 top-down
+document.getElementById('camBtn').addEventListener('click', ()=>{
+  camMode = (camMode+1)%2;
+  if(camMode===1){
+    camera.position.set(player.position.x,60,player.position.z+0.1);
+    camera.lookAt(player.position);
+  } else {
+    camera.position.set(player.position.x,20,player.position.z+30);
+  }
+});
+
+// Reset
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  player.position.set(0,1.5,0);
+  targetPos.copy(player.position);
+  showLog('Position réinitialisée.');
+});
+
+// Resize handling
+window.addEventListener('resize', ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// Simple collision: keep player above ground
+function clampPlayer(){
+  if(player.position.x>95) player.position.x=95;
+  if(player.position.x<-95) player.position.x=-95;
+  if(player.position.z>95) player.position.z=95;
+  if(player.position.z<-95) player.position.z=-95;
+}
+
+// Main loop
+let last = performance.now();
+function loop(now){
+  let delta = (now-last)/1000;
+  last = now;
+  animate(delta);
+  clampPlayer();
+  renderer.render(scene, camera);
+  renderMini();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// Keyboard controls for desktop
+let keys = {};
+window.addEventListener('keydown', (e)=>{keys[e.key.toLowerCase()] = true;});
+window.addEventListener('keyup', (e)=>{keys[e.key.toLowerCase()] = false;});
+setInterval(()=>{
+  let moved=false;
+  let move = new THREE.Vector3();
+  if(keys['w']||keys['arrowup']){ move.z -= 1; moved=true; }
+  if(keys['s']||keys['arrowdown']){ move.z += 1; moved=true; }
+  if(keys['a']||keys['arrowleft']){ move.x -= 1; moved=true; }
+  if(keys['d']||keys['arrowright']){ move.x += 1; moved=true; }
+  if(moved){
+    move.normalize();
+    targetPos.copy(player.position).add(move.multiplyScalar(6));
+  }
+}, 80);
+
+// Tiny helper: auto show zone names on start
+setTimeout(()=>{ showLog('Tape une zone (Yopougon, Abobo, Plateau, Cocody, Treichville, Banco)'); },1200);
+
+</script>
+</body>
+</html>
